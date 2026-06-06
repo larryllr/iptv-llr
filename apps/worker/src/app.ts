@@ -20,6 +20,36 @@ async function digest(value: string) {
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function streamSignature(url: string, env: Env) {
+  return digest(`${url}\n${env.ADMIN_PASSWORD}`);
+}
+
+async function proxyStream(url: string, signature: string, env: Env) {
+  if (signature !== await streamSignature(url, env)) return new Response("Invalid stream signature", { status: 403 });
+  const upstream = await fetch(url, {
+    redirect: "follow",
+    headers: { "user-agent": "Mozilla/5.0 IPTV-LLR/1.0", accept: "*/*" }
+  });
+  if (!upstream.ok) return new Response(`Upstream ${upstream.status}`, { status: 502 });
+  const type = upstream.headers.get("content-type") ?? "";
+  const isPlaylist = type.includes("mpegurl") || /\.m3u8(?:$|\?)/i.test(upstream.url);
+  const headers = new Headers({
+    "access-control-allow-origin": "*",
+    "cache-control": isPlaylist ? "no-store" : "public, max-age=30",
+    "content-type": type || (isPlaylist ? "application/vnd.apple.mpegurl" : "application/octet-stream")
+  });
+  if (!isPlaylist) return new Response(upstream.body, { headers });
+  const text = await upstream.text();
+  const lines = await Promise.all(text.split(/\r?\n/).map(async (line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return line;
+    const absolute = new URL(trimmed, upstream.url).toString();
+    const sig = await streamSignature(absolute, env);
+    return `/api/v1/stream-segment?url=${encodeURIComponent(absolute)}&sig=${sig}`;
+  }));
+  return new Response(lines.join("\n"), { headers });
+}
+
 async function authorized(request: Request, env: Env) {
   const token = /(?:^|;\s*)iptv_session=([^;]+)/.exec(request.headers.get("cookie") ?? "")?.[1];
   if (!token) return false;
@@ -36,6 +66,31 @@ async function effective(env: Env) {
   return mergeChannels(upstream, overrides, new Set(disabled), custom);
 }
 
+export async function performSync(env: Env) {
+  const url = env.UPSTREAM_URL ?? "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.m3u";
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`上游返回 ${response.status}`);
+    const channels = await parsePlaylist(await response.text());
+    if (!channels.length) throw new Error("同步结果为空");
+    const revision = Date.now().toString();
+    await Promise.all([
+      env.CHANNELS.put(SNAPSHOT, JSON.stringify(channels)),
+      env.CHANNELS.put(REVISION, revision),
+      env.CHANNELS.put("sync:status", JSON.stringify({
+        state: "success", updatedAt: new Date().toISOString(), channelCount: channels.length
+      }))
+    ]);
+    return { ok: true, revision, channelCount: channels.length };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "同步失败";
+    await env.CHANNELS.put("sync:status", JSON.stringify({
+      state: "error", updatedAt: new Date().toISOString(), channelCount: 0, message
+    }));
+    throw new Error(message);
+  }
+}
+
 export const app = new Hono<{ Bindings: Env }>();
 
 app.get("/api/v1/revision", async (c) =>
@@ -48,6 +103,21 @@ app.get("/api/v1/channels", async (c) => {
   c.header("etag", `"${revision}"`);
   c.header("cache-control", "public, max-age=60");
   return c.json({ revision, generatedAt: new Date().toISOString(), channels: await effective(c.env) });
+});
+
+app.get("/api/v1/stream/:channel/:source", async (c) => {
+  const channels = await effective(c.env);
+  const channel = channels.find((item) => item.id === c.req.param("channel"));
+  const source = channel?.sources[Number(c.req.param("source"))];
+  if (!source || !["http", "https"].includes(source.protocol)) return c.text("Source unavailable", 404);
+  return proxyStream(source.url, await streamSignature(source.url, c.env), c.env);
+});
+
+app.get("/api/v1/stream-segment", async (c) => {
+  const url = c.req.query("url");
+  const signature = c.req.query("sig");
+  if (!url || !signature) return c.text("Missing stream parameters", 400);
+  return proxyStream(url, signature, c.env);
 });
 
 app.post("/api/admin/login", async (c) => {
@@ -85,26 +155,10 @@ app.get("/api/admin/state", async (c) => {
 });
 
 app.post("/api/admin/sync", async (c) => {
-  const url = c.env.UPSTREAM_URL ?? "https://raw.githubusercontent.com/imzyb/iptv-api/main/output/result.m3u";
   try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`上游返回 ${response.status}`);
-    const channels = await parsePlaylist(await response.text());
-    if (!channels.length) throw new Error("同步结果为空");
-    const revision = Date.now().toString();
-    await Promise.all([
-      c.env.CHANNELS.put(SNAPSHOT, JSON.stringify(channels)),
-      c.env.CHANNELS.put(REVISION, revision),
-      c.env.CHANNELS.put("sync:status", JSON.stringify({
-        state: "success", updatedAt: new Date().toISOString(), channelCount: channels.length
-      }))
-    ]);
-    return c.json({ ok: true, revision, channelCount: channels.length });
+    return c.json(await performSync(c.env));
   } catch (error) {
     const message = error instanceof Error ? error.message : "同步失败";
-    await c.env.CHANNELS.put("sync:status", JSON.stringify({
-      state: "error", updatedAt: new Date().toISOString(), channelCount: 0, message
-    }));
     return c.json({ error: message }, 502);
   }
 });
@@ -139,4 +193,3 @@ app.delete("/api/admin/custom/:id", async (c) => {
 app.all("*", async (c) => c.env.ASSETS ? c.env.ASSETS.fetch(c.req.raw) : c.text("IPTV LLR API"));
 
 export default app;
-

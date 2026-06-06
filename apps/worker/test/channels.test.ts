@@ -21,6 +21,15 @@ rtsp://b.example/live
     const channels = await parsePlaylist("Bad,javascript:alert(1)\nNo URL");
     expect(channels).toEqual([]);
   });
+
+  it("ignores playlist update-time metadata entries", async () => {
+    const channels = await parsePlaylist(`#EXTM3U
+#EXTINF:-1 group-title="🕘️更新时间",2026-05-16 11:37:47
+https://example.com
+#EXTINF:-1 group-title="央视",CCTV-1
+https://example.com/live.m3u8`);
+    expect(channels.map((channel) => channel.name)).toEqual(["CCTV-1"]);
+  });
 });
 
 describe("channel merging", () => {

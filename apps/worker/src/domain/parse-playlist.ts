@@ -45,6 +45,7 @@ export async function parsePlaylist(input: string): Promise<Channel[]> {
       url = line.slice(comma + 1).trim();
     }
 
+    if (metadata.category.includes("更新时间") || /^\d{4}-\d{2}-\d{2}\s/.test(metadata.name)) continue;
     const parsedSource = sourceLineSchema.safeParse({ url });
     if (!metadata.name || !parsedSource.success) continue;
     const key = metadata.name.toLocaleLowerCase();
@@ -76,4 +77,3 @@ export async function parsePlaylist(input: string): Promise<Channel[]> {
     )
   );
 }
-

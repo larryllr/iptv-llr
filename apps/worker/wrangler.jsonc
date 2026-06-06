@@ -11,14 +11,19 @@
   "kv_namespaces": [
     {
       "binding": "CHANNELS",
-      "id": "REPLACE_WITH_PRODUCTION_KV_ID",
-      "preview_id": "REPLACE_WITH_PREVIEW_KV_ID"
+      "id": "ea9dfb35ef28430f832386ad1a7d30b9"
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "neycbs.de5.net",
+      "custom_domain": true
     }
   ],
   "triggers": {
     "crons": ["0 3 * * *"]
   },
   "vars": {
-    "UPSTREAM_URL": "https://raw.githubusercontent.com/imzyb/iptv-api/main/output/result.m3u"
+    "UPSTREAM_URL": "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.m3u"
   }
 }
