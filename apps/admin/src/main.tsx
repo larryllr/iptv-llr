@@ -107,8 +107,10 @@ function PublicPlayer() {
         hls.loadSource(playbackUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          setMessage("");
-          void video.play().catch(() => setMessage("点击画面开始播放"));
+          video.muted = true;
+          void video.play()
+            .then(() => setMessage("已静音自动播放，点击画面开启声音"))
+            .catch(() => setMessage("点击画面开始播放"));
         });
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (data.fatal) failover();
@@ -143,10 +145,16 @@ function PublicPlayer() {
     onTouchStart={wakeControls}
     onKeyDown={wakeControls}
   >
-    <video ref={videoRef} className="video-stage" playsInline onClick={() => {
+    <video ref={videoRef} className="video-stage" playsInline muted onClick={() => {
       const video = videoRef.current;
       if (!video) return;
-      video.paused ? void video.play() : video.pause();
+      if (video.muted) {
+        video.muted = false;
+        setMessage("");
+        void video.play();
+      } else {
+        video.paused ? void video.play() : video.pause();
+      }
     }}/>
     <div className="video-shade"/>
     <header className="player-header player-ui">
