@@ -41,6 +41,19 @@ https://media.example.com/cctv1.m3u8`);
       "https://media.example.com/cctv1.m3u8"
     ]);
   });
+
+  it("normalizes CCTV quality and description suffixes", async () => {
+    const channels = await parsePlaylist(`#EXTM3U
+#EXTINF:-1 group-title="央视",CCTV-3 (720p)
+https://media.example.com/cctv3.m3u8
+#EXTINF:-1 group-title="央视",CCTV-10 科教
+https://media.example.com/cctv10.m3u8
+#EXTINF:-1 group-title="央视",CCTV-17 农业农村
+https://media.example.com/cctv17.m3u8`);
+    expect(channels.map((channel) => channel.name)).toEqual([
+      "CCTV-3", "CCTV-10", "CCTV-17"
+    ]);
+  });
 });
 
 describe("channel merging", () => {

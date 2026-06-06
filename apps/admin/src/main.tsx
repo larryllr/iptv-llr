@@ -57,6 +57,13 @@ function PublicPlayer() {
   const [message, setMessage] = useState("正在载入频道...");
   const [controlsVisible, setControlsVisible] = useState(true);
   const [hideDelay, setHideDelay] = useState(3);
+  const reportHealth = (url: string, ok: boolean) => {
+    void fetch("/api/v1/health", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url, ok })
+    });
+  };
 
   useEffect(() => {
     api("/api/v1/channels").then((result) => {
@@ -100,6 +107,7 @@ function PublicPlayer() {
       void fetch(playbackUrl).then(async (response) => {
         const manifest = await response.text();
         if (!response.ok || !manifest.includes("#EXTM3U") || placeholderPattern.test(manifest)) {
+          reportHealth(source.url, false);
           failover();
           return;
         }
@@ -107,15 +115,22 @@ function PublicPlayer() {
         hls.loadSource(playbackUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          reportHealth(source.url, true);
           video.muted = true;
           void video.play()
             .then(() => setMessage("已静音自动播放，点击画面开启声音"))
             .catch(() => setMessage("点击画面开始播放"));
         });
         hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal) failover();
+          if (data.fatal) {
+            reportHealth(source.url, false);
+            failover();
+          }
         });
-      }).catch(failover);
+      }).catch(() => {
+        reportHealth(source.url, false);
+        failover();
+      });
     } else if (source.protocol === "http" || source.protocol === "https") {
       video.src = `/api/v1/stream/${selected.id}/${sourceIndex}`;
       void video.play().then(() => setMessage("")).catch(() => setMessage("点击画面开始播放"));
@@ -158,7 +173,7 @@ function PublicPlayer() {
     }}/>
     <div className="video-shade"/>
     <header className="player-header player-ui">
-      <div className="player-brand"><span><Tv/></span><b>视界 IPTV</b></div>
+      <div className="player-brand"><img src="/kuan-tv-icon.png" alt="宽TV"/><div><b>宽TV</b><small>作者：宽宽</small></div></div>
       <div className="player-tools">
         <label className="delay-setting">控件隐藏
           <select value={hideDelay} onChange={(event) => setHideDelay(Number(event.target.value))}>
@@ -170,7 +185,7 @@ function PublicPlayer() {
     </header>
     <section className="now-playing player-ui">
       <div className="live-dot"/> <span>正在直播</span>
-      <h1>{selected?.name ?? "视界 IPTV"}</h1>
+      <h1>{selected?.name ?? "宽TV"}</h1>
       <p>{selected ? `${selected.category} · ${selected.sources.length} 条网页兼容线路` : "选择频道开始观看"}</p>
       {message && <div className="play-message">{message}</div>}
     </section>
@@ -226,7 +241,7 @@ function AdminApp() {
   if (!authenticated) return <main className="login-shell">
     <a className="back-player" href="/">返回播放</a>
     <section className="login-card"><div className="brand-mark"><Tv size={28}/></div>
-      <h1>视界 IPTV</h1><p>登录频道管理中心</p>
+      <h1>宽TV</h1><p>作者：宽宽 · 登录频道管理中心</p>
       <form onSubmit={async (event) => { event.preventDefault(); setMessage("");
         try { await api("/api/admin/login", { method: "POST", body: JSON.stringify({ password }) }); await load(); }
         catch (error) { setMessage((error as Error).message); }}}>
@@ -236,7 +251,7 @@ function AdminApp() {
     </section>
   </main>;
 
-  return <div className="app-shell"><aside><div className="brand"><div className="brand-mark"><Tv size={20}/></div><b>视界 IPTV</b></div>
+  return <div className="app-shell"><aside><div className="brand"><img className="brand-icon" src="/kuan-tv-icon.png" alt="宽TV"/><div><b>宽TV</b><small>作者：宽宽</small></div></div>
     <nav><button className="active"><Tv/>频道管理</button><button><Upload/>导入播放源</button><button><Settings/>系统设置</button></nav>
     <a className="view-player" href="/"><Expand/>打开播放页</a>
     <button className="logout" onClick={async()=>{await api("/api/admin/logout",{method:"POST"});setAuthenticated(false);}}><LogOut/>退出登录</button></aside>

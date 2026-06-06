@@ -7,6 +7,13 @@ type PendingMetadata = {
   logo?: string;
 };
 
+function normalizeChannelName(name: string) {
+  const cctv = /^CCTV[-\s]?(\d{1,2})(?:\+)?(?:\s|\(|$)/i.exec(name);
+  if (!cctv) return name;
+  const suffix = /^CCTV[-\s]?\d{1,2}(\+)/i.exec(name)?.[1] ?? "";
+  return `CCTV-${cctv[1]}${suffix}`;
+}
+
 function parseExtInf(line: string): PendingMetadata | null {
   const comma = line.lastIndexOf(",");
   if (comma < 0) return null;
@@ -52,6 +59,8 @@ export async function parsePlaylist(input: string): Promise<Channel[]> {
     ) continue;
     const parsedSource = sourceLineSchema.safeParse({ url });
     if (!metadata.name || !parsedSource.success) continue;
+    const originalName = metadata.name;
+    metadata = { ...metadata, name: normalizeChannelName(metadata.name) };
     const key = metadata.name.toLocaleLowerCase();
     const existing = grouped.get(key);
     if (existing) {
@@ -60,7 +69,7 @@ export async function parsePlaylist(input: string): Promise<Channel[]> {
     }
     grouped.set(key, {
       name: metadata.name,
-      aliases: [],
+      aliases: originalName === metadata.name ? [] : [originalName],
       category: metadata.category,
       ...(metadata.logo ? { logo: metadata.logo } : {}),
       origin: "upstream",

@@ -1,4 +1,6 @@
-# IPTV LLR
+# 宽TV
+
+作者：宽宽
 
 Cloudflare-hosted IPTV channel management with Windows and Android clients.
 

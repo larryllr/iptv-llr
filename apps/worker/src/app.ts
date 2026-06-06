@@ -10,6 +10,7 @@ const OVERRIDES = "channels:overrides";
 const DISABLED = "channels:disabled";
 const REVISION = "channels:revision";
 const SESSION_PREFIX = "session:";
+const HEALTH = "channels:health";
 
 async function readJson<T>(kv: KVNamespace, key: string, fallback: T): Promise<T> {
   return (await kv.get<T>(key, "json")) ?? fallback;
@@ -67,16 +68,37 @@ async function effective(env: Env) {
 }
 
 export async function performSync(env: Env) {
-  const url = env.UPSTREAM_URL ?? "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.m3u";
+  const urls = env.UPSTREAM_URLS?.split(/\s+/).filter(Boolean) ?? [
+    env.UPSTREAM_URL ?? "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.m3u"
+  ];
   try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`上游返回 ${response.status}`);
-    const channels = await parsePlaylist(await response.text());
+    const results = await Promise.allSettled(urls.map(async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`${url} 返回 ${response.status}`);
+      return parsePlaylist(await response.text());
+    }));
+    const merged = new Map<string, Channel>();
+    for (const result of results) {
+      if (result.status !== "fulfilled") continue;
+      for (const channel of result.value) {
+        const existing = merged.get(channel.id);
+        if (!existing) {
+          merged.set(channel.id, channel);
+          continue;
+        }
+        const urls = new Set(existing.sources.map((source) => source.url));
+        for (const source of channel.sources) {
+          if (!urls.has(source.url)) existing.sources.push(source);
+        }
+      }
+    }
+    const channels = Array.from(merged.values());
     if (!channels.length) throw new Error("同步结果为空");
     const revision = Date.now().toString();
     await Promise.all([
       env.CHANNELS.put(SNAPSHOT, JSON.stringify(channels)),
       env.CHANNELS.put(REVISION, revision),
+      env.CHANNELS.delete(HEALTH),
       env.CHANNELS.put("sync:status", JSON.stringify({
         state: "success", updatedAt: new Date().toISOString(), channelCount: channels.length
       }))
@@ -102,7 +124,39 @@ app.get("/api/v1/channels", async (c) => {
   if (c.req.header("if-none-match") === `"${revision}"`) return c.body(null, 304);
   c.header("etag", `"${revision}"`);
   c.header("cache-control", "public, max-age=60");
-  return c.json({ revision, generatedAt: new Date().toISOString(), channels: await effective(c.env) });
+  const health = await readJson<Record<string, { failures: number; lastFailure?: string; lastSuccess?: string }>>(
+    c.env.CHANNELS, HEALTH, {}
+  );
+  const channels = await effective(c.env);
+  const filtered = await Promise.all(channels.map(async (channel) => ({
+    ...channel,
+    sources: (await Promise.all(channel.sources.map(async (source) => ({
+      source,
+      record: health[await digest(source.url)]
+    })))).filter(({ record }) => !record || record.failures < 3).map(({ source }) => source)
+  })));
+  return c.json({
+    revision,
+    generatedAt: new Date().toISOString(),
+    channels: filtered.filter((channel) => channel.sources.length > 0)
+  });
+});
+
+app.post("/api/v1/health", async (c) => {
+  const body = await c.req.json<{ url?: string; ok?: boolean }>();
+  if (!body.url || typeof body.ok !== "boolean" || body.url.length > 4096) {
+    return c.json({ error: "Invalid health report" }, 400);
+  }
+  const key = await digest(body.url);
+  const health = await readJson<Record<string, { failures: number; lastFailure?: string; lastSuccess?: string }>>(
+    c.env.CHANNELS, HEALTH, {}
+  );
+  const current = health[key] ?? { failures: 0 };
+  health[key] = body.ok
+    ? { failures: 0, lastSuccess: new Date().toISOString() }
+    : { ...current, failures: Math.min(current.failures + 1, 10), lastFailure: new Date().toISOString() };
+  await c.env.CHANNELS.put(HEALTH, JSON.stringify(health));
+  return c.json({ ok: true });
 });
 
 app.get("/api/v1/stream/:channel/:source", async (c) => {
