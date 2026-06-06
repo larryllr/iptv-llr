@@ -30,6 +30,17 @@ https://example.com
 https://example.com/live.m3u8`);
     expect(channels.map((channel) => channel.name)).toEqual(["CCTV-1"]);
   });
+
+  it("removes known placeholder streaming routes", async () => {
+    const channels = await parsePlaylist(`#EXTM3U
+#EXTINF:-1 group-title="央视",CCTV-1
+https://iptv.catvod.com/live.php?id=CCTV1
+#EXTINF:-1 group-title="央视",CCTV-1
+https://media.example.com/cctv1.m3u8`);
+    expect(channels[0].sources.map((source) => source.url)).toEqual([
+      "https://media.example.com/cctv1.m3u8"
+    ]);
+  });
 });
 
 describe("channel merging", () => {

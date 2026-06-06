@@ -15,6 +15,26 @@ type Channel = {
   updatedAt: string; aliases: string[];
 };
 
+const trustedWebHosts = [
+  "ali-m-l.cztv.com",
+  "l.cztvcloud.com",
+  "satellitepull.cnr.cn",
+  "ls.qingting.fm",
+  "p2hs.vzan.com",
+  "epg.pw"
+];
+const placeholderPattern = /backup\.m3u8|testvideo|nosignal|no_signal|placeholder/i;
+
+function webSourceScore(source: Source) {
+  try {
+    const host = new URL(source.url).hostname;
+    const index = trustedWebHosts.indexOf(host);
+    return index < 0 ? 100 : index;
+  } catch {
+    return 1000;
+  }
+}
+
 async function api(path: string, init?: RequestInit) {
   const response = await fetch(path, {
     ...init,
@@ -40,10 +60,22 @@ function PublicPlayer() {
 
   useEffect(() => {
     api("/api/v1/channels").then((result) => {
-      const items = result.channels as Channel[];
+      const items = (result.channels as Channel[])
+        .map((channel) => ({
+          ...channel,
+          sources: channel.sources.filter((source) =>
+            source.protocol === "https" &&
+            !/^https:\/\/iptv\.catvod\.com\//i.test(source.url)
+          ).sort((a, b) => webSourceScore(a) - webSourceScore(b))
+        }))
+        .filter((channel) => channel.sources.length > 0)
+        .sort((a, b) => {
+          const score = webSourceScore(a.sources[0]) - webSourceScore(b.sources[0]);
+          return score || a.order - b.order;
+        });
       setChannels(items);
       setSelected(items[0] ?? null);
-      setMessage(items.length ? "" : "暂时没有可播放频道，请稍后再试");
+      setMessage(items.length ? "" : "当前源没有浏览器兼容线路，请使用客户端");
     }).catch(() => setMessage("频道服务暂不可用，请稍后刷新"));
   }, []);
 
@@ -53,25 +85,35 @@ function PublicPlayer() {
     if (!source || !video) return;
     setMessage("正在连接直播源...");
     let hls: Hls | undefined;
+    const failover = () => {
+      if (sourceIndex + 1 < selected.sources.length) {
+        setMessage(`线路 ${sourceIndex + 1} 不可用，正在自动切换...`);
+        setSourceIndex((current) => current + 1);
+      } else {
+        setMessage("该频道当前所有线路均不可用，请尝试其他频道");
+      }
+    };
     if ((source.protocol === "http" || source.protocol === "https") && Hls.isSupported()) {
-      hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-      hls.loadSource(source.protocol === "https"
+      const playbackUrl = source.protocol === "https"
         ? source.url
-        : `/api/v1/stream/${selected.id}/${sourceIndex}`);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        setMessage("");
-        void video.play().catch(() => setMessage("点击画面开始播放"));
-      });
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (!data.fatal) return;
-        if (sourceIndex + 1 < selected.sources.length) {
-          setMessage(`线路 ${sourceIndex + 1} 不可用，正在自动切换...`);
-          setSourceIndex((current) => current + 1);
-        } else {
-          setMessage("该频道当前所有线路均不可用，请尝试其他频道");
+        : `/api/v1/stream/${selected.id}/${sourceIndex}`;
+      void fetch(playbackUrl).then(async (response) => {
+        const manifest = await response.text();
+        if (!response.ok || !manifest.includes("#EXTM3U") || placeholderPattern.test(manifest)) {
+          failover();
+          return;
         }
-      });
+        hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hls.loadSource(playbackUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setMessage("");
+          void video.play().catch(() => setMessage("点击画面开始播放"));
+        });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) failover();
+        });
+      }).catch(failover);
     } else if (source.protocol === "http" || source.protocol === "https") {
       video.src = `/api/v1/stream/${selected.id}/${sourceIndex}`;
       void video.play().then(() => setMessage("")).catch(() => setMessage("点击画面开始播放"));
@@ -121,7 +163,7 @@ function PublicPlayer() {
     <section className="now-playing player-ui">
       <div className="live-dot"/> <span>正在直播</span>
       <h1>{selected?.name ?? "视界 IPTV"}</h1>
-      <p>{selected ? `${selected.category} · ${selected.sources.length} 条可用线路` : "选择频道开始观看"}</p>
+      <p>{selected ? `${selected.category} · ${selected.sources.length} 条网页兼容线路` : "选择频道开始观看"}</p>
       {message && <div className="play-message">{message}</div>}
     </section>
     <section className="player-bottom player-ui">
