@@ -1,0 +1,23 @@
+{
+  "name": "iptv-llr",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "workspaces": [
+    "apps/admin",
+    "apps/worker",
+    "packages/contracts"
+  ],
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
+
